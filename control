@@ -2,7 +2,7 @@ Package: com.masterking.lookinloader2
 Name: LookinLoader2
 Version: 0.0.1
 Architecture: iphoneos-arm
-Description: Dynamically loads RevealServer.framework into iOS applications.
+Description: Dynamically loads LookinServer.framework into iOS applications.
 Maintainer: masterKing <masterking1012@gmail.com>
 Author: masterKing <masterking1012@gmail.com>
 Section: Tweaks
