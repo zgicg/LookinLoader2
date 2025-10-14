@@ -1,14 +1,14 @@
-name: Build LookinServer when upstream or local code changes
+name: Build LookinLoader2 when upstream or local code changes
 
 on:
-  push:                     # Trigger on push to any branch
-  workflow_dispatch:        # Manual trigger
-  schedule:                 # Daily check once
-    - cron: "0 3 * * *"     # 03:00 UTC ≈ 20:00 Vancouver
+  push:                     # 当仓库中有推送时触发
+  workflow_dispatch:        # 手动触发
+  schedule:                 # 每天自动检查上游更新
+    - cron: "0 3 * * *"     # 每天 UTC 3 点 (北京时间 11:00)
 
 env:
-  LOOKIN_DEMO_PATH: LookinDemo/OC_Pod
-  DEMO_SCHEME:      LookinDemoOC
+  UPSTREAM_REPO: https://github.com/QMUI/LookinServer.git
+  UPSTREAM_BRANCH: main
 
 jobs:
   detect:
@@ -22,13 +22,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # ① Get the latest commit SHA from QMUI/LookinServer
+    # ① 获取上游仓库最新 commit SHA
     - name: Fetch upstream SHA
       id: upstream
       run: |
-        SHA=$(git ls-remote https://github.com/QMUI/LookinServer.git refs/heads/main | cut -f1)
+        SHA=$(git ls-remote ${{ env.UPSTREAM_REPO }} refs/heads/${{ env.UPSTREAM_BRANCH }} | cut -f1)
         echo "sha=$SHA" >> $GITHUB_OUTPUT
-    # ② Path filtering: Check if local repo changed
+
+    # ② 检查本地是否有变动
     - name: Filter local changes
       id: filter
       uses: dorny/paths-filter@v3
@@ -36,26 +37,29 @@ jobs:
         list-files: shell
         filters: |
           build:
+            - 'release_build.sh'
             - 'Tweak/**'
             - 'Makefile'
             - '.github/workflows/**'
-    # ③ Calculate the overall build flag
+
+    # ③ 判断是否需要构建
     - name: Decide build flags
       id: set
       run: |
         STORED=$(cat UPSTREAM_COMMIT 2>/dev/null || echo none)
         UP_CHANGED=false
         [[ "$STORED" != "${{ steps.upstream.outputs.sha }}" ]] && UP_CHANGED=true
+
         SHOULD=$([[ "$UP_CHANGED" == true || "${{ steps.filter.outputs.build }}" == 'true' ]] && echo true || echo false)
-        echo "up_changed=$UP_CHANGED"   >>$GITHUB_OUTPUT
-        echo "sha=${{ steps.upstream.outputs.sha }}"   >>$GITHUB_OUTPUT
-        echo "should=$SHOULD"           >>$GITHUB_OUTPUT
+
+        echo "up_changed=$UP_CHANGED" >> $GITHUB_OUTPUT
+        echo "sha=${{ steps.upstream.outputs.sha }}" >> $GITHUB_OUTPUT
+        echo "should=$SHOULD" >> $GITHUB_OUTPUT
+
   build:
     needs: detect
     if: needs.detect.outputs.should_build == 'true'
     runs-on: macos-latest
-    strategy:
-      matrix: { scheme: [rootful, rootless] }
 
     env:
       LS_CHANGED: ${{ needs.detect.outputs.upstream_changed }}
@@ -63,73 +67,43 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # ① 如果上游有更新则克隆
     - name: Clone upstream @sha
       if: env.LS_CHANGED == 'true'
       run: |
-        git clone --depth=1 https://github.com/QMUI/LookinServer.git upstream
-        # Check out the exact commit for consistency
+        git clone --depth=1 ${{ env.UPSTREAM_REPO }} upstream
         cd upstream && git checkout ${{ needs.detect.outputs.sha }}
-    - name: Install CocoaPods & pod install
-      if: env.LS_CHANGED == 'true'
-      uses: maxim-lobanov/setup-cocoapods@v1
+
+    # ② 执行 release_build.sh
+    - name: Make script executable
+      run: chmod +x ./release_build.sh
+
+    - name: Run release build
+      run: ./release_build.sh
+
+    # ③ 上传构建产物（自动检测 build 目录）
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
       with:
-        version: latest
+        name: LookinLoader2-build
+        path: |
+          build/
+          output/
+          Release/
+          dist/
+          packages/
+          **/*.deb
+          **/*.zip
+          **/*.tar.gz
+        if-no-files-found: ignore
 
-    - name: pod install (LookinDemo)
+    # ④ 如果上游更新了，则记录最新 SHA 并提交
+    - name: Commit updated UPSTREAM_COMMIT
       if: env.LS_CHANGED == 'true'
-      working-directory: upstream/${{ env.LOOKIN_DEMO_PATH }}
-      run: pod install
-
-    - name: xcodebuild archive LookinDemoOC
-      if: env.LS_CHANGED == 'true'
-      working-directory: upstream/${{ env.LOOKIN_DEMO_PATH }}
-      run: |
-        xcodebuild archive \
-          -workspace "${{ env.DEMO_SCHEME }}.xcworkspace" \
-          -scheme     "${{ env.DEMO_SCHEME }}" \
-          -configuration Release \
-          -sdk iphoneos \
-          -destination 'generic/platform=iOS' \
-          BUILD_LIBRARIES_FOR_DISTRIBUTION=YES \
-          SKIP_INSTALL=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGN_IDENTITY="" \
-          -archivePath build/${{ env.DEMO_SCHEME }}.xcarchive
-    - name: Copy LookinServer binary
-      if: env.LS_CHANGED == 'true'
-      run: |
-        SRC=upstream/${{ env.LOOKIN_DEMO_PATH }}/build/${{ env.DEMO_SCHEME }}.xcarchive/Products/Applications/${{ env.DEMO_SCHEME }}.app/Frameworks/LookinServer.framework/LookinServer
-        test -f "$SRC" || { echo "Binary not found"; exit 1; }
-        cp -f "$SRC" layout/Library/Frameworks/LookinServer.framework/LookinServer
-    - name: Cache Theos
-      uses: actions/cache@v3
-      with:
-        path: theos
-        key: ${{ runner.os }}-theos-${{ hashFiles('**/Makefile') }}
-        restore-keys: ${{ runner.os }}-theos-
-
-    - uses: Randomblock1/theos-action@v1
-    - name: Configure Theos env
-      run: |
-        echo "ARCHS=arm64 arm64e" >> $GITHUB_ENV
-        if [[ "${{ matrix.scheme }}" == "rootless" ]]; then
-          echo "THEOS_PACKAGE_SCHEME=rootless" >> $GITHUB_ENV
-        fi
-    - name: make package
-      run: make -C Tweak clean package FINALPACKAGE=1
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.scheme }}-deb
-        path: Tweak/packages/*.deb
-
-    - name: Commit updated LookinServer + SHA
-      if: env.LS_CHANGED == 'true' && matrix.scheme == 'rootless'
       run: |
         echo "${{ needs.detect.outputs.sha }}" > UPSTREAM_COMMIT
         git config user.name  github-actions
         git config user.email github-actions@github.com
-        git add UPSTREAM_COMMIT layout/Library/Frameworks/LookinServer.framework/LookinServer
-        git commit -m "chore: update LookinServer to ${{ needs.detect.outputs.sha }}"
+        git add UPSTREAM_COMMIT
+        git commit -m "chore: update upstream LookinServer to ${{ needs.detect.outputs.sha }}"
         git push
