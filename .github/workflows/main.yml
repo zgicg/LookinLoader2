@@ -101,7 +101,7 @@ jobs:
       run: |
         SRC=upstream/${{ env.LOOKIN_DEMO_PATH }}/build/${{ env.DEMO_SCHEME }}.xcarchive/Products/Applications/${{ env.DEMO_SCHEME }}.app/Frameworks/LookinServer.framework/LookinServer
         test -f "$SRC" || { echo "Binary not found"; exit 1; }
-        cp -f "$SRC" Tweak/layout/Library/LookinLoader/LookinServer
+        cp -f "$SRC" layout/Library/Frameworks/LookinServer.framework/LookinServer
     - name: Cache Theos
       uses: actions/cache@v3
       with:
@@ -130,6 +130,6 @@ jobs:
         echo "${{ needs.detect.outputs.sha }}" > UPSTREAM_COMMIT
         git config user.name  github-actions
         git config user.email github-actions@github.com
-        git add UPSTREAM_COMMIT Tweak/layout/Library/LookinLoader/LookinServer
+        git add UPSTREAM_COMMIT layout/Library/Frameworks/LookinServer.framework/LookinServer
         git commit -m "chore: update LookinServer to ${{ needs.detect.outputs.sha }}"
         git push
